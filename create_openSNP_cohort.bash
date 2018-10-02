@@ -1,4 +1,5 @@
 #!/bin/bash
+#set -e
 #requirement, libpng-dev
 #For liftover...
 #wget -q -O /tmp/libpng12.deb http://mirrors.kernel.org/ubuntu/pool/main/libp/libpng/libpng12-0_1.2.54-1ubuntu1_amd64.deb \
@@ -6,7 +7,7 @@
 #      && rm /tmp/libpng12.deb
 
 nb_proc=38
-
+hg19="ref/human_g1k_v37.fasta"
 ##Exclude files bellow 10M
 rename=$(readlink -f bin/rename)
 gunzip=$(readlink -f bin/gunzip)
@@ -16,18 +17,20 @@ liftmap=$(readlink -f bin/LiftMap.py)
 vcf_sort=$(readlink -f bin/vcf-sort)
 bgzip=$(readlink -f bin/bgzip)
 bcftools=$(readlink -f bin/bcftools)
-hg19=$(readlink -f ref/human_g1k_v37.fasta)
+hg19=$(readlink -f $hg19)
 
-mkdir -p openSNP{/discarded/{size-excluded,exome,others,decodeme,dup}}
+mkdir -p openSNP{/discarded/{size-excluded,exome,others,decodeme,dup},/log}
 
 echo $(date): Downloading...
-#wget https://opensnp.org/data/zip/opensnp_datadump.current.zip
-
-echo $(date): Unzipping...
-$unzip opensnp_datadump.current.zip -d openSNP
+if [ ! -f opensnp_datadump.current.zip ]; then
+  wget https://opensnp.org/data/zip/opensnp_datadump.current.zip
+fi
+exit
+echo $(date): Unzipping... log in log/unzipping.log
+$unzip opensnp_datadump.current.zip -d openSNP &> openSNP/log/unzipping.log
 cd openSNP
 
-echo $(date): Renaming...
+echo $(date): Renaming files...
 $rename 's/user//g;s/_file/./g;s/_yearofbirth_.*?\./\./g' *
 
 echo $(date): Excluding file under 10M and over 50M...
@@ -37,7 +40,8 @@ find . -maxdepth 1 -type f -size +50M -exec mv {} discarded/size-excluded \;
 echo $(date): Sorting files...
 function sort_it {
 	mkdir -p discarded/$filetype
-	mv $filename discarded/$filetype/}
+	mv $filename discarded/$filetype/
+}
 
 while read -r line; do
   filename=$(awk -F':' '{print $1}' <<< $line)
@@ -74,7 +78,7 @@ rmdir discarded/{ASCII,RSID}
 mv *exome* discarded/exome
 mv *decodeme* discarded/decodeme
 
-#Remove people that uploaded their genome multiple times
+#Deal with people that uploaded their genome multiple times
 echo $(date): Keep only the biggest file between, duplicated, multi imputed, and sample genotyped by different company...
 
 #move all concerned samples a dup folder
@@ -90,7 +94,7 @@ ls discarded/dup/ | cut -f1 -d '.' | sort | uniq -d | sed 's/$/\.\*/g' | xargs -
 $rename 's/\.+?[0-9]+//' *
 
 ###Formatting
-echo $(date): Formatting file comming from different companies...
+echo $(date): Formatting file coming from different companies...
 #Formatter, set endline to unix, set norm to ensemble from plink or ucsc
 find -maxdepth 1 -type f | xargs -P$nb_proc -I {} sed -i 's/\r$//;s/rsid/ d/gI;/^#/ d;s/ \+/\t/g;s/\"//g;s/,/\t/g;s/chr//g;s/\tXY\t/\tX\t/g;s/\tM\t/\tMT\t/g;s/\t25\t/\t23\t/g' {}
 
@@ -135,7 +139,7 @@ find -maxdepth 1 -type f | xargs -P$nb_proc -I {} grep -HP 'rs145997327\t1\t1088
 find -maxdepth 1 -type f | xargs -P$nb_proc -I {} grep -HP 'rs2308040\t1\t13779899' {} | awk -F':' '{print $1}'| xargs -I {} mv {} build38/
 
 ####Lift build36
-echo $(date): Lift and convert samples from build 36 to 37...
+echo $(date): Lift and convert samples from build 36 to 37... log in log/\{b36_convert_to_vcf.log, b36_lifting.log, b36_convert_to_vcf.log\}
 
 #convert directly from 23 to ped/map for lifting
 find build36/*.txt -maxdepth 1 -type f -printf "%f\n" | xargs -P$nb_proc -I {} $plink --23file build36/{} --output-chr 'MT' --recode --out build36/pedmap/{} &> log/b36_convert_to_plink.log
@@ -147,37 +151,34 @@ find build36/*.txt -maxdepth 1 -type f -printf "%f\n" | xargs -P$nb_proc -I {} $
 find build36/*.txt -maxdepth 1 -type f -printf "%f\n" | xargs -P$nb_proc -I {} $plink --file build36/lifted/{} --recode vcf-iid --output-chr 'MT' --snps-only just-acgt --biallelic-only strict --keep-allele-order --out vcf/{} &> log/b36_convert_to_vcf.log
 
 ####Convert build37
-echo $(date): convert build 37 to vcf...
+echo $(date): convert build 37 to vcf... log in log/b37_convert_to_vcf.log
 find build37/* -printf "%f\n" | xargs -P$nb_proc -I {} $plink --23file build37/{} --recode vcf-iid --output-chr 'MT' --snps-only just-acgt --biallelic-only strict --keep-allele-order --out vcf/{} &> log/b37_convert_to_vcf.log
 
-echo $(date): Fix annotation...
+echo $(date): Fix annotation... log in log/fixed.log
 find vcf/*.vcf -printf "%f\n" | xargs -P$nb_proc -I {} $bcftools norm -f $hg19 -c s vcf/{} -o fixed/{} &> log/fixed.log
 
 #Need to be sorted again after fixing samples to the same reference
-echo $(date): Sorting...
+echo $(date): Sorting... log in log/sorted.log
 find fixed/* -printf "%f\n" | xargs -P$nb_proc -I {} sh -c "$vcf_sort -c fixed/{} > sorted/{}" &> log/sorted.log
 
-echo $(date): Renaming...
-find sorted/* -printf "%f\n" | xargs -P$nb_proc -I {} bash -c "$bcftools reheader sorted/{}  -s <(cut -d '.' -f1 <<<'{}') -o renamed/{}" &> log/renaming.log
+echo $(date): Renaming samples...
+find sorted/* -printf "%f\n" | xargs -P$nb_proc -I {} bash -c "$bcftools reheader sorted/{}  -s <(cut -d '.' -f1 <<<'{}') -o renamed/{}"
 
 echo $(date): Bgziping...
-find renamed/* | xargs -P$nb_proc -I {} $bgzip {} &> log/bzip.log
+find renamed/* | xargs -P$nb_proc -I {} $bgzip {}
 
 echo $(date): Indexing...
-find renamed/* | xargs -P$nb_proc -I {} $bcftools index {} &> log/index.log
+find renamed/* | xargs -P$nb_proc -I {} $bcftools index {}
 
-echo $(date): Merging... see: log/merge_index.log
+echo $(date): Merging...
 nb_files=$(ls renamed/*.gz | wc -l)
-for i in {1..$((nb_files/100))}; do
-  echo "merging from $((i - 1))00 to ${i}00 files..." 
-  $bcftools merge -l <(ls renamed/*.gz | head -n $((i*100)) | tail -n 100) --threads $nb_proc -Oz -o merged/part.${i}.gz; done
+for i in $(seq 1 $((nb_files/100))); do $bcftools merge -l <(ls renamed/*.gz | head -n $((i*100)) | tail -n 100) --threads $nb_proc -Oz -o merged/part.${i}.gz; done
 $bcftools merge -l <(ls renamed/*.gz | tail -n $((nb_files%100))) --threads $nb_proc -Oz -o merged/part.rest.gz
-find merged/*.gz | xargs -P$nb_proc -I {} $bcftools index {} &> log/merge_index.log
+find merged/*.gz | xargs -P$nb_proc -I {} $bcftools index {} 
 $bcftools merge -l <(ls merged/part*gz) --threads $nb_proc -Oz -o merged/openSNP_dataset.vcf.gz
-$bcftools index openSNP_dataset.vcf.gz
+$bcftools index merged/openSNP_dataset.vcf.gz
 
-$plink --vcf merged/openSNP_dataset.vcf.gz --geno 0.9 --hwe 1e-50 --recode vcf-iid bgz --keep-allele-order  --output-chr 'MT' --remove-fam <($bcftools +guess-ploidy -g b37 openSNP_dataset_QC.vcf.gz | grep U | grep -P '[0-9]*' -o) --out openSNP_dataset_QC
-
+$plink --vcf merged/openSNP_dataset.vcf.gz --geno 0.9 --hwe 1e-50 --recode vcf-iid bgz --keep-allele-order  --output-chr 'MT' --remove-fam <($bcftools +guess-ploidy -g b37 openSNP_dataset.vcf.gz | grep U | grep -P '[0-9]*' -o) --out openSNP_dataset_QC
 
 echo $(date): Done! You can know impute the file openSNP_dataset_QC.vcf.gz on Sanger Imputation Service https://imputation.sanger.ac.uk/
 
