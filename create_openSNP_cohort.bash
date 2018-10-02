@@ -1,14 +1,31 @@
-#!/bin/bash
-#set -e
+#!/bin/bash -
+#===============================================================================
+#
+#          FILE: create_openSNP_cohort.bash
+#
+#         USAGE: ./create_openSNP_cohort.bash
+#
+#   DESCRIPTION: see README.md 
+#
+#       OPTIONS: Adjust the number of cores available by changing variable 'nb_proc'
+#  REQUIREMENTS: Install all dependencies as explained in the README.md file
+#          BUGS: ---
+#         NOTES: ---
+#        AUTHOR: OLIVIER NARET (ON), onaret@gmail.com
+#  ORGANIZATION: EPFL
+#       CREATED: 01/01/2017 03:14:36 PM
+#      REVISION:  ---
+#===============================================================================
+
+nb_proc=4
+
 #requirement, libpng-dev
 #For liftover...
 #wget -q -O /tmp/libpng12.deb http://mirrors.kernel.org/ubuntu/pool/main/libp/libpng/libpng12-0_1.2.54-1ubuntu1_amd64.deb \
 #    && dpkg -i /tmp/libpng12.deb \
 #      && rm /tmp/libpng12.deb
 
-nb_proc=38
 hg19="ref/human_g1k_v37.fasta"
-##Exclude files bellow 10M
 rename=$(readlink -f bin/rename)
 gunzip=$(readlink -f bin/gunzip)
 unzip=$(readlink -f bin/unzip)
