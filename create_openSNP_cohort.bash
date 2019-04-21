@@ -30,6 +30,8 @@
 #    && dpkg -i /tmp/libpng12.deb \
 #      && rm /tmp/libpng12.deb
 
+nb_proc=4
+
 rename=$(readlink -f bin/rename)
 gunzip=$(readlink -f bin/gunzip)
 unzip=$(readlink -f bin/unzip)
@@ -40,7 +42,6 @@ bgzip=$(readlink -f bin/bgzip)
 bcftools=$(readlink -f bin/bcftools)
 hg19=$(readlink -f ref/human_g1k_v37.fasta)
 
-nb_proc=40
 memory_tot=$(free -m|awk '/^Mem:/{print $2}')
 memory=$(echo "$memory_tot/$nb_proc" | bc)
 
