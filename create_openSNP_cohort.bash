@@ -17,7 +17,12 @@
 #      REVISION:  ---
 #===============================================================================
 
-nb_proc=4
+
+#module load gcc/6.4.0
+#module load bzip2
+#Do not work but should
+#module load libpng
+
 
 #requirement, libpng-dev
 #For liftover...
@@ -25,7 +30,6 @@ nb_proc=4
 #    && dpkg -i /tmp/libpng12.deb \
 #      && rm /tmp/libpng12.deb
 
-hg19="ref/human_g1k_v37.fasta"
 rename=$(readlink -f bin/rename)
 gunzip=$(readlink -f bin/gunzip)
 unzip=$(readlink -f bin/unzip)
@@ -34,18 +38,53 @@ liftmap=$(readlink -f bin/LiftMap.py)
 vcf_sort=$(readlink -f bin/vcf-sort)
 bgzip=$(readlink -f bin/bgzip)
 bcftools=$(readlink -f bin/bcftools)
-hg19=$(readlink -f $hg19)
+hg19=$(readlink -f ref/human_g1k_v37.fasta)
+
+nb_proc=40
+memory_tot=$(free -m|awk '/^Mem:/{print $2}')
+memory=$(echo "$memory_tot/$nb_proc" | bc)
 
 mkdir -p openSNP{/discarded/{size-excluded,exome,others,decodeme,dup},/log}
+cd openSNP
+
+echo $(date): Checking dependencies... \(you should add liftOver manually, see README.md\)
+
+function test_it {
+  $1 --help &> /dev/null
+  exit_code=$?
+  if [[ $exit_code != $2 ]]; then
+    echo $(date): FAILURE: $1 exited with error code: $exit_code
+    $1 --help
+    exit
+  else
+    echo $(date): SUCCESS: $1 seems to work
+  fi
+}
+
+test_it $rename 255
+test_it $gunzip 0
+test_it $unzip 0
+test_it $plink 0
+test_it $liftmap 0
+test_it $vcf_sort 255
+test_it $bgzip 1
+test_it ../bin/liftOver 255
+test_it $bcftools 0
+
+if [ ! -f ../ref/human_g1k_v37.fasta ]; then
+  echo $(date): Download reference genome
+  wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.gz -P ref/
+  wget ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/human_g1k_v37.fasta.fai -P ref/
+  $gunzip ref/human_g1k_v37.fasta.gz
+fi
 
 echo $(date): Downloading...
-if [ ! -f opensnp_datadump.current.zip ]; then
-  wget https://opensnp.org/data/zip/opensnp_datadump.current.zip
+if [ ! -f ../opensnp_datadump.current.zip ]; then
+  wget https://opensnp.org/data/zip/opensnp_datadump.current.zip -P ../
 fi
-exit
+
 echo $(date): Unzipping... log in log/unzipping.log
-$unzip opensnp_datadump.current.zip -d openSNP &> openSNP/log/unzipping.log
-cd openSNP
+$unzip ../opensnp_datadump.current.zip -d . &> log/unzipping.log
 
 echo $(date): Renaming files...
 $rename 's/user//g;s/_file/./g;s/_yearofbirth_.*?\./\./g' *
@@ -53,6 +92,8 @@ $rename 's/user//g;s/_file/./g;s/_yearofbirth_.*?\./\./g' *
 echo $(date): Excluding file under 10M and over 50M...
 find . -maxdepth 1 -type f -size -10M -exec mv {} discarded/size-excluded \;
 find . -maxdepth 1 -type f -size +50M -exec mv {} discarded/size-excluded \;
+
+mv picture_phenotypes* discarded/
 
 echo $(date): Sorting files...
 function sort_it {
@@ -122,6 +163,7 @@ $rename 's/\.tmp//g' *
 #Need to be sorted here for future conversions
 echo $(date): Sorting...
 find -maxdepth 1 -type f | xargs -P$nb_proc -I {} sh -c 'for i in $(seq 1 26) X XY Y MT M; do awk -F"\t" -vi="$i" "{if ( i==\$2 ) {print $1}}" {}; done > {}.tmp'
+
 rm *.txt
 $rename 's/\.tmp//g' *
 
@@ -159,17 +201,18 @@ find -maxdepth 1 -type f | xargs -P$nb_proc -I {} grep -HP 'rs2308040\t1\t137798
 echo $(date): Lift and convert samples from build 36 to 37... log in log/\{b36_convert_to_vcf.log, b36_lifting.log, b36_convert_to_vcf.log\}
 
 #convert directly from 23 to ped/map for lifting
-find build36/*.txt -maxdepth 1 -type f -printf "%f\n" | xargs -P$nb_proc -I {} $plink --23file build36/{} --output-chr 'MT' --recode --out build36/pedmap/{} &> log/b36_convert_to_plink.log
+find build36/*.txt -maxdepth 1 -type f -printf "%f\n" | xargs -P$nb_proc -I {} $plink --23file build36/{} --memory $memory --output-chr 'MT' --recode --out build36/pedmap/{} &> log/b36_convert_to_plink.log
 
+###HERE I WAS
 #lift
 find build36/*.txt -maxdepth 1 -type f -printf "%f\n" | xargs -P$nb_proc -I {} $liftmap -m build36/pedmap/{}.map -p build36/pedmap/{}.ped -o build36/lifted/{} &> log/b36_lifting.log
 
 #convert back to vcf
-find build36/*.txt -maxdepth 1 -type f -printf "%f\n" | xargs -P$nb_proc -I {} $plink --file build36/lifted/{} --recode vcf-iid --output-chr 'MT' --snps-only just-acgt --biallelic-only strict --keep-allele-order --out vcf/{} &> log/b36_convert_to_vcf.log
+find build36/*.txt -maxdepth 1 -type f -printf "%f\n" | xargs -P$nb_proc -I {} $plink --file build36/lifted/{} --memory $memory --recode vcf-iid --output-chr 'MT' --snps-only just-acgt --biallelic-only strict --keep-allele-order --out vcf/{} &> log/b36_convert_to_vcf.log
 
 ####Convert build37
 echo $(date): convert build 37 to vcf... log in log/b37_convert_to_vcf.log
-find build37/* -printf "%f\n" | xargs -P$nb_proc -I {} $plink --23file build37/{} --recode vcf-iid --output-chr 'MT' --snps-only just-acgt --biallelic-only strict --keep-allele-order --out vcf/{} &> log/b37_convert_to_vcf.log
+find build37/* -printf "%f\n" | xargs -P$nb_proc -I {} $plink --23file build37/{} --memory $memory -recode vcf-iid --output-chr 'MT' --snps-only just-acgt --biallelic-only strict --keep-allele-order --out vcf/{} &> log/b37_convert_to_vcf.log
 
 echo $(date): Fix annotation... log in log/fixed.log
 find vcf/*.vcf -printf "%f\n" | xargs -P$nb_proc -I {} $bcftools norm -f $hg19 -c s vcf/{} -o fixed/{} &> log/fixed.log
@@ -195,7 +238,9 @@ find merged/*.gz | xargs -P$nb_proc -I {} $bcftools index {}
 $bcftools merge -l <(ls merged/part*gz) --threads $nb_proc -Oz -o merged/openSNP_dataset.vcf.gz
 $bcftools index merged/openSNP_dataset.vcf.gz
 
-$plink --vcf merged/openSNP_dataset.vcf.gz --geno 0.9 --hwe 1e-50 --recode vcf-iid bgz --keep-allele-order  --output-chr 'MT' --remove-fam <($bcftools +guess-ploidy -g b37 openSNP_dataset.vcf.gz | grep U | grep -P '[0-9]*' -o) --out openSNP_dataset_QC
+echo $(date): QCing... log in log/QC.log
+BCFTOOLS_PLUGINS=../bin/bcftools_plugins
+$plink --vcf merged/openSNP_dataset.vcf.gz --geno 0.9 --hwe 1e-50 --recode vcf-iid bgz --keep-allele-order  --output-chr 'MT' --remove-fam <($bcftools +guess-ploidy -g b37 merged/openSNP_dataset.vcf.gz | grep U | grep -P '[0-9]*' -o) --out openSNP_dataset_QC &> log/QC.log
 
 echo $(date): Done! You can know impute the file openSNP_dataset_QC.vcf.gz on Sanger Imputation Service https://imputation.sanger.ac.uk/
 

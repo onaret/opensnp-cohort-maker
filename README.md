@@ -11,7 +11,7 @@ The versions mentioned were the one used on the last successful run
 * gunzip (gzip) 1.6 (to install if not already in the core of your distribution)
 * plink (PLINK v1.90b4.5 64-bit) (included)
 * vcf-sort (https://vcftools.github.io/license.html) (included)
-* rename (The Larry's version) (included)
+* rename (The SZABÓ Gergely's version https://github.com/subogero/rename) (included)
 * liftMap.py a script that use liftOver (https://genome.sph.umich.edu/wiki/LiftMap.py) (included and modified)
 
 #### Dependencies in ./ref are:
